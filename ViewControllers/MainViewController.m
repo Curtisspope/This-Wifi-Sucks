@@ -35,6 +35,11 @@ typedef enum
     
 }SearchCategory;
 
+typedef enum
+{
+    geocodePost, appspotPost
+}postType;
+
 @interface ViewController()
 {
 /*instance variables*/
@@ -79,10 +84,10 @@ typedef enum
     InfoViewController* infoViewController;
     ModalTableViewViewController* modalTableViewController;
     dispatch_queue_t urlRequestQueue;
-    NSMutableArray *geocodeQueue;
     BOOL isGeocoding;
     BOOL yelpCheckIsDone;
     NSMutableArray *localAppspotArray;
+    NSData *geocodeData;
 }
 @property CLGeocoder *geocoder;
 @end
@@ -150,6 +155,7 @@ typedef enum
     /*Data Initialize*/
         
         oldData = [NSData new];
+        geocodeData = [NSData new];
         //this is for checking that the data being recieved is not identical, if it is we don't need to run all the logic
         //-(void)requestTokenTicket:(OAServiceTicket *)ticket didFinishWithData:(NSData *)_data
         
@@ -164,7 +170,7 @@ typedef enum
         isGeocoding = NO;
         
     /*Map View Initial Setup*/
-        
+        NSDictionary *dsf = [NSDictionary new]; int i = (int)dsf.count;
         self.mapView.delegate = self;
         [mainView setClipsToBounds:YES];
         
@@ -447,7 +453,7 @@ typedef enum
     NSLog(@"appspot response: %@", responseString);
     
     NSDictionary* appspotJSON = [NSJSONSerialization JSONObjectWithData:data options:kNilOptions error:nil];
-    
+    NSString *geocodePostString = @"";
     
     
     //create a list of TWSBusiness objects//make local appspot list
@@ -474,7 +480,8 @@ typedef enum
     if(businessArray.count > 0)
     {
         
-        NSLog(@"start iterating: business array count: %d", businessArray.count);
+        NSLog(@"start iterating: business array count: %d", (int)businessArray.count);
+        int addedYelpBusinesses = 0;
         
         //add yelp and foursquare results to local business list
         for(int i = 0; i < businessArray.count; i++)
@@ -518,16 +525,40 @@ typedef enum
                 business.rating = 2;
                 business.ratingCount = 0;
                 
-                NSString *addressString = [NSString stringWithFormat:@"%@ %@ %@", yelpBusinessAddress, [yelpBusinessAddressArray objectForKey:@"country_code"], [yelpBusinessAddressArray objectForKey:@"postal_code"]];
-                NSLog(@"Yelp address string: %@", addressString);
+                NSCharacterSet *notAllowedChars = [[NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789"] invertedSet];
                 
-                [self geocodeLocalAppspotArrayIndex:localAppspotArray.count + 1 andAddressString:addressString];
+                NSString *addressString = [NSString stringWithFormat:@"%@ %@ %@", yelpBusinessAddress, [yelpBusinessAddressArray objectForKey:@"postal_code"], [yelpBusinessAddressArray objectForKey:@"country_code"]];
+                addressString = [[addressString componentsSeparatedByCharactersInSet:notAllowedChars] componentsJoinedByString:@""];
+                NSLog(@"Yelp address string: %@", addressString);
+                business.geocodeAddress = addressString;
+                
+                if([geocodePostString isEqualToString:@""])
+                {
+                    geocodePostString = [NSString stringWithFormat:@"\"%@\"", addressString];
+                }
+                else
+                {
+                    geocodePostString = [NSString stringWithFormat:@"%@, \"%@\"", geocodePostString, addressString];
+                }
+                
+                addedYelpBusinesses ++;
                 
                 [localAppspotArray addObject:business];
             }
         }
-        yelpCheckIsDone = YES;
+        geocodePostString = [NSString stringWithFormat:@"[%@]", geocodePostString];
         
+        
+        NSLog(@"geocodePostString: %@", geocodePostString);
+        
+        [self postRequestWithHTTPBody:geocodePostString atURL:[NSURL URLWithString:@"http://www.datasciencetoolkit.org/street2coordinates"] andPostType:geocodePost];
+        
+        
+        
+        //sort
+        [self businessSortByDistanceWithNumberOfAddedYelpBusinesses:addedYelpBusinesses];
+        //addpins to map
+        //update picker
     }
     else//empty yelp list
     {
@@ -537,54 +568,22 @@ typedef enum
 
 #pragma mark - Still Needs Categorized
 
--(void)geocodeLocalAppspotArrayIndex:(int)index andAddressString:(NSString*)addressString
+
+-(void)businessSortByDistanceWithNumberOfAddedYelpBusinesses:(int)yelpBusinesses
 {
+    TWSBusiness *business = [TWSBusiness new];
     
-    if(!isGeocoding)
+    NSDictionary* geocodeJSON = [NSJSONSerialization JSONObjectWithData:geocodeData options:kNilOptions error:nil];
+    
+    for(int i = abs(localAppspotArray.count - yelpBusinesses); i < localAppspotArray.count; i++)
     {
-        isGeocoding = YES;
-        
-
-        
-        [self.geocoder geocodeAddressString:addressString completionHandler:^(NSArray *placemarks, NSError *error)
-         {
-             isGeocoding = NO;
-             
-             if(geocodeQueue[index +1])
-             {
-                 [self geocodeLocalAppspotArrayIndex:index+1 andAddressString:geocodeQueue[index + 1]];
-             }
-             
-             if ([placemarks count] > 0)
-             {
-                 CLPlacemark *placemark = [placemarks objectAtIndex:0];
-                 TWSBusiness *business = localAppspotArray[index];
-                 business.latitude = placemark.location.coordinate.latitude;
-                 business.longitude = placemark.location.coordinate.longitude;
-                 
-                 //getting distance used 3 times// make it its own method?
-                 CLLocation *businessLocation = [[CLLocation alloc] initWithLatitude:business.latitude longitude:business.longitude];
-                 NSLog(@"business lat and long %@", businessLocation);
-                 business.distanceFromUserLocation = [NSNumber numberWithDouble:[businessLocation distanceFromLocation:locationManager.location]];
-                 
-                 if(yelpCheckIsDone)
-                 {
-                     //sort
-                     [self arraySort];
-                     //addpins to map
-                     //update picker
-                 }
-             }
-         }];
+        business = localAppspotArray[i];
+        NSDictionary *businessInfo = [geocodeJSON objectForKey:business.geocodeAddress];
+        business.latitude = [[businessInfo objectForKey:@"latitude"] doubleValue];
+        business.longitude = [[businessInfo objectForKey:@"longitude"] doubleValue];
+        NSLog(@"GEO: name: %@ lat:%f long:%f", business.name, business.latitude, business.longitude);
     }
-    else
-    {
-        [geocodeQueue insertObject:addressString atIndex:index];
-    }
-}
-
--(void)arraySort
-{
+    
     //sort by distance
     NSSortDescriptor *distanceDescriptor = [[NSSortDescriptor alloc] initWithKey:@"distanceFromUserLocation" ascending:YES];
     NSArray *sortDescriptors = @[distanceDescriptor];
@@ -594,7 +593,7 @@ typedef enum
     for(int i = 0; i < localAppspotArray.count; i++)
     {
         TWSBusiness *business = [sortedBusinessArray objectAtIndex:i];
-        NSLog(@"name:%@ distance: %@", business.name, business.distanceFromUserLocation);
+        NSLog(@"name: %@ distance: %@", business.name, business.distanceFromUserLocation);
     }
 }
 
@@ -923,7 +922,7 @@ typedef enum
             NSLog(@"updated user location");
             //self.mapView.showsUserLocation = NO;
             MKCoordinateRegion region = MKCoordinateRegionMakeWithDistance(newLocation.coordinate, radius, radius);
-    
+            //[self postRequestWithHTTPBody];
             dispatch_async(urlRequestQueue, ^(void)
             {
                 [_activityIndicator startAnimating];
@@ -960,24 +959,47 @@ typedef enum
     [mapView setVisibleMapRect:zoomRect animated:YES];
 }
 
--(void)geocodeAddress:(NSString*)address inTheCountry:(NSString*)country atZipCode:(NSString*)zipCode
+-(void)postRequestWithHTTPBody:(NSString*)bodyData atURL:(NSURL*)url andPostType:(int)postType
 {
-    if(!self.geocoder)
-    {
-        self.geocoder = [[CLGeocoder alloc] init];
-    }
-    [self.geocoder geocodeAddressString:[NSString stringWithFormat:@"%@ %@ %@", address, country, zipCode] completionHandler:^(NSArray *placemarks, NSError *error)
-    {
-        if ([placemarks count] > 0)
-        {
-            CLPlacemark *placemark = [placemarks objectAtIndex:0];
-            CLLocation *location = placemark.location;
-        }
-        else
-        {
-            NSLog(@"invalid geolocation data");
-        }
-    }];
+    //NSURL *url = [NSURL URLWithString:@"http://www.datasciencetoolkit.org/street2coordinates"];
+    
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+    // Set request type
+    request.HTTPMethod = @"POST";
+    
+    // Set params to be sent to the server
+    //NSString *params = [NSString stringWithFormat:@"[\"2543 Graystone Place 93065 US\", \"400 \"]"];
+    //NSLog(@"params: %@", params);
+    // Encoding type
+    NSData *data = [bodyData dataUsingEncoding:NSUTF8StringEncoding];
+    // Add values and contenttype to the http header
+    [request addValue:@"8bit" forHTTPHeaderField:@"Content-Transfer-Encoding"];
+    [request addValue:@"application/x-www-form-urlencoded" forHTTPHeaderField:@"Content-Type"];
+    //[request addValue:@"accounts.google.com" forHTTPHeaderField:@"Host:"];
+    //[request addValue:[NSString stringWithFormat:@"%lu", (unsigned long)[data length]] forHTTPHeaderField:@"Content-Length"];
+    [request setHTTPBody:data];
+    //NSURLResponse *response;
+    //NSError *error = nil;
+    // Send the request
+    [NSURLConnection sendAsynchronousRequest:request queue:[NSOperationQueue mainQueue] completionHandler:^(NSURLResponse *response, NSData *data, NSError *error)
+     {
+         NSLog(@"geocode connection!");
+         NSLog(@"%@", [[NSString alloc]initWithData:data encoding:NSUTF8StringEncoding]);
+         
+         switch(postType)
+         {
+             case 0:
+                 geocodeData = data;
+                 break;
+             case 1:
+                 break;
+         }
+         
+         //NSDictionary *authJSON = [NSJSONSerialization JSONObjectWithData:_data options:kNilOptions error:nil];
+
+     }];
+
+
 }
 
 #pragma mark - Yelp Request ToBeDeleted
@@ -994,7 +1016,7 @@ typedef enum
     switch(searchFilter.selectedSegmentIndex)//what tab of the segmented controller are we on
     {{
         case here:
-            
+     
             //foursquare venues api, 5,000 queries/ hour without using OAuth
             url = [NSURL URLWithString:[NSString stringWithFormat:@"https://api.foursquare.com/v2/venues/search?client_id=4AS5WGWKSTRO1FRKWEQSICMSVQIJGP5F5LPSUT1SKGF5EFZJ&client_secret=1ONFG5JEFULGI1ASZLWON0FKQ01204BCDEYSYB4YOC54MEMD&v=20130815&ll=%f,%f&limit=10", locationManager.location.coordinate.latitude, locationManager.location.coordinate.longitude]];
         NSLog(@"url: %@", url);
