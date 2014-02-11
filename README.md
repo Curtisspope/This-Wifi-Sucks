@@ -33,6 +33,8 @@ Public API's Used
 
 [Foursquare](https://developer.foursquare.com/)
 
+[DataScienceToolkit](http://www.datasciencetoolkit.org/developerdocs#street2coordinates)
+
 Backend Powered By
 ===============
 
