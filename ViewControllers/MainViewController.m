@@ -86,8 +86,9 @@ typedef enum
     dispatch_queue_t urlRequestQueue;
     BOOL isGeocoding;
     BOOL yelpCheckIsDone;
+    BOOL didLoadBusinessData;
     NSMutableArray *localAppspotArray;
-    NSData *geocodeData;
+    int appspotServerResponseCount;
 }
 @property CLGeocoder *geocoder;
 @end
@@ -155,7 +156,6 @@ typedef enum
     /*Data Initialize*/
         
         oldData = [NSData new];
-        geocodeData = [NSData new];
         //this is for checking that the data being recieved is not identical, if it is we don't need to run all the logic
         //-(void)requestTokenTicket:(OAServiceTicket *)ticket didFinishWithData:(NSData *)_data
         
@@ -453,6 +453,9 @@ typedef enum
     NSLog(@"appspot response: %@", responseString);
     
     NSDictionary* appspotJSON = [NSJSONSerialization JSONObjectWithData:data options:kNilOptions error:nil];
+    appspotServerResponseCount = appspotJSON.count;
+    NSLog(@"appspot server response count: %d", appspotServerResponseCount);
+    
     NSString *geocodePostString = @"";
     
     
@@ -556,9 +559,7 @@ typedef enum
         
         
         //sort
-        [self businessSortByDistanceWithNumberOfAddedYelpBusinesses:addedYelpBusinesses];
-        //addpins to map
-        //update picker
+
     }
     else//empty yelp list
     {
@@ -569,20 +570,27 @@ typedef enum
 #pragma mark - Still Needs Categorized
 
 
--(void)businessSortByDistanceWithNumberOfAddedYelpBusinesses:(int)yelpBusinesses
+-(void)businessSortByDistanceWithNumberOfAddedYelpBusinesses:(int)yelpBusinesses andGeocodeData:(NSData*)data
 {
     TWSBusiness *business = [TWSBusiness new];
     
-    NSDictionary* geocodeJSON = [NSJSONSerialization JSONObjectWithData:geocodeData options:kNilOptions error:nil];
+    NSDictionary* geocodeJSON = [NSJSONSerialization JSONObjectWithData:data options:kNilOptions error:nil];
     
-    for(int i = abs(localAppspotArray.count - yelpBusinesses); i < localAppspotArray.count; i++)
+    int yelpBusinessesAdded = abs(localAppspotArray.count - appspotServerResponseCount);
+    
+    for(int i = abs(localAppspotArray.count - yelpBusinessesAdded); i < localAppspotArray.count; i++)
     {
         business = localAppspotArray[i];
         NSDictionary *businessInfo = [geocodeJSON objectForKey:business.geocodeAddress];
         business.latitude = [[businessInfo objectForKey:@"latitude"] doubleValue];
         business.longitude = [[businessInfo objectForKey:@"longitude"] doubleValue];
         NSLog(@"GEO: name: %@ lat:%f long:%f", business.name, business.latitude, business.longitude);
+        
+        //calculate distance
+        CLLocation *businessLocation = [[CLLocation alloc] initWithLatitude:business.latitude longitude:business.longitude];
+        business.distanceFromUserLocation = [NSNumber numberWithDouble:[businessLocation distanceFromLocation:locationManager.location]];
     }
+    
     
     //sort by distance
     NSSortDescriptor *distanceDescriptor = [[NSSortDescriptor alloc] initWithKey:@"distanceFromUserLocation" ascending:YES];
@@ -595,6 +603,24 @@ typedef enum
         TWSBusiness *business = [sortedBusinessArray objectAtIndex:i];
         NSLog(@"name: %@ distance: %@", business.name, business.distanceFromUserLocation);
     }
+    
+    //addpins to map
+    [self addPinsToMap];//need to properly override annotation class
+    
+    //update picker
+    [self updatePickerView];
+}
+
+-(void)addPinsToMap
+{
+    //animate pin drop
+}
+
+-(void)updatePickerView
+{
+    didLoadBusinessData = YES;
+    [_locationPicker reloadAllComponents];
+    //animate picker up
 }
 
 -(void)changedSearchFilter
@@ -886,7 +912,16 @@ typedef enum
 
 -(NSString*)pickerView:(UIPickerView *)pickerView titleForRow:(NSInteger)row forComponent:(NSInteger)component
 {
-    return @"Starbucks";//[array objectAtIndex:row];
+    if(didLoadBusinessData)
+    {
+        TWSBusiness *business = [localAppspotArray objectAtIndex:row];
+        
+        return business.name;
+    }
+    else
+    {
+        return @"";
+    }
 }
 
 -(void)pickerView:(UIPickerView *)pickerView didSelectRow:(NSInteger)row inComponent:(NSInteger)component
@@ -989,7 +1024,8 @@ typedef enum
          switch(postType)
          {
              case 0:
-                 geocodeData = data;
+                 //asyncronously post new data to appspot
+                 [self businessSortByDistanceWithNumberOfAddedYelpBusinesses:10 andGeocodeData:data];//10 should be a variable
                  break;
              case 1:
                  break;
