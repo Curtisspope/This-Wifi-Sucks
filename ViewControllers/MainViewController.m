@@ -20,6 +20,8 @@
 #import "AppDelegate.h"
 #import "ModalTableViewViewController.h"
 #import "TWSBusiness.h"
+#import "GraphView.h"
+#import "SingletonPropertyManager.h"
 
 #define METERS_PER_MILE 1609.344
 
@@ -88,7 +90,10 @@ typedef enum
     BOOL yelpCheckIsDone;
     BOOL didLoadBusinessData;
     NSMutableArray *localAppspotArray;
+    NSArray *sortedBusinessArray;
+    NSArray *annotationArray;
     int appspotServerResponseCount;
+    int newAppspotOffset;
 }
 @property CLGeocoder *geocoder;
 @end
@@ -137,6 +142,7 @@ typedef enum
         searchOffset = 0;
         searchType = 3;
         clickedRow = -1;
+        newAppspotOffset = 0;
         
         halfScreenWidth = [[UIScreen mainScreen]bounds].size.width*.5;
         halfScreenHeight = [[UIScreen mainScreen]bounds].size.height*.5;
@@ -152,6 +158,8 @@ typedef enum
         self.addressArray = [NSMutableArray new];
         businessArray = [NSMutableArray new];
         localAppspotArray = [NSMutableArray new];
+        sortedBusinessArray = [NSArray new];
+        annotationArray = [NSArray new];
         
     /*Data Initialize*/
         
@@ -170,8 +178,7 @@ typedef enum
         isGeocoding = NO;
         
     /*Map View Initial Setup*/
-        NSDictionary *dsf = [NSDictionary new]; int i = (int)dsf.count;
-        self.mapView.delegate = self;
+        mapView.delegate = self;
         [mainView setClipsToBounds:YES];
         
     /*Define Dispatch Queue*/
@@ -221,7 +228,7 @@ typedef enum
             locationManager.delegate = self;
             locationManager.desiredAccuracy = kCLLocationAccuracyThreeKilometers;
             //locationManager.activityType = CLActivityTypeFitness;
-            
+#pragma mark - comment this out to test graphics
             [locationManager startUpdatingLocation];
         }
         
@@ -274,6 +281,7 @@ typedef enum
 -(void)viewWillDisappear:(BOOL)animated
 {
     [self.navigationController setNavigationBarHidden:NO animated:animated];
+    [self.navigationController setTitle:@"Comfort Inn"];
     [super viewWillAppear:animated];
 }
 
@@ -282,6 +290,7 @@ typedef enum
 - (void)viewDidLoad
 {
     [super viewDidLoad];
+    
     
     mapView.showsUserLocation = YES;
     
@@ -393,7 +402,7 @@ typedef enum
     MKMapPoint userLocationPoint = MKMapPointForCoordinate(userLocation.coordinate);
     MKMapRect mapRect = MKMapRectMake(userLocationPoint.x, userLocationPoint.y, region.span.latitudeDelta, region.span.longitudeDelta);
     
-    NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"http://com-thiswifisucks.appspot.com/_je/businessList?cond=latitude.ge.%f&cond=latitude.le.%f&cond=longitude.ge.%f&cond=longitude.le.%f", MKMapRectGetMinX(mapRect), MKMapRectGetMaxX(mapRect), MKMapRectGetMinY(mapRect), MKMapRectGetMaxY(mapRect)]];
+    NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"http://com-thiswifisucks.appspot.com/_je/businessList"]];// ?cond=latitude.ge.%f&cond=latitude.le.%f&cond=longitude.ge.%f&cond=longitude.le.%f", MKMapRectGetMinX(mapRect), MKMapRectGetMaxX(mapRect), MKMapRectGetMinY(mapRect), MKMapRectGetMaxY(mapRect)]];
     
     NSLog(@"appspot url: %@", url);
     
@@ -450,124 +459,111 @@ typedef enum
 -(void)appspotResponse:(NSData*)data
 {
     NSString *responseString = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    responseString = [responseString stringByReplacingOccurrencesOfString:@"\\" withString:@""];
+
     NSLog(@"appspot response: %@", responseString);
     
-    NSDictionary* appspotJSON = [NSJSONSerialization JSONObjectWithData:data options:kNilOptions error:nil];
-    appspotServerResponseCount = appspotJSON.count;
+    NSData *stringData = [responseString dataUsingEncoding:NSUTF8StringEncoding];
+    NSArray* appspotJSON = [NSJSONSerialization JSONObjectWithData:stringData options:kNilOptions error:nil];
+
+    NSLog(@"dictionary: %@", appspotJSON);
+    
+    appspotServerResponseCount = (int)appspotJSON.count;
     NSLog(@"appspot server response count: %d", appspotServerResponseCount);
     
     NSString *geocodePostString = @"";
     
+    NSDictionary *jsonObject;
+    NSString* yelpBusinessName;
+    NSString* yelpBusinessAddress;
     
     //create a list of TWSBusiness objects//make local appspot list
-    for(int i = 0; i < appspotJSON.count; i++)
+    for(int i = 0; i < (int)appspotJSON.count; i++)
     {
+        int noMatchCount = 0;
         TWSBusiness *business = [TWSBusiness new];
-
         
-        business.name = [appspotJSON objectForKey:@"name"];
-        business.address = [appspotJSON objectForKey:@"address"];
-        business.rating = [[appspotJSON objectForKey:@"rating"] integerValue];
-        business.ratingCount = [[appspotJSON objectForKey:@"ratingCount"] integerValue];
-        business.latitude = [[appspotJSON objectForKey:@"latitude"] integerValue];
-        business.longitude = [[appspotJSON objectForKey:@"longitude"] integerValue];
+        jsonObject = [appspotJSON objectAtIndex:i];
+        
+        business.name = [jsonObject objectForKey:@"name"];
+        business.address = [jsonObject objectForKey:@"address"];
+        business.rating = [[jsonObject objectForKey:@"overallRatingAvg"] integerValue];
+        business.ratingCount = [[jsonObject objectForKey:@"overallNumberOfRatings"] integerValue];
+        business.latitude = [[jsonObject objectForKey:@"latitude"] integerValue];
+        business.longitude = [[jsonObject objectForKey:@"longitude"] integerValue];
+        business.dayOfTheWeekRatings = [jsonObject objectForKey:@"ratings"];
+        
+        NSLog(@"appspot business ratings: %@", business.dayOfTheWeekRatings);
         
         CLLocation *businessLocation = [[CLLocation alloc] initWithLatitude:business.latitude longitude:business.longitude];
         business.distanceFromUserLocation = [NSNumber numberWithDouble:[businessLocation distanceFromLocation:locationManager.location]];
         
+        
+        NSLog(@"added business object");
         [localAppspotArray addObject:business];
-    }
-    
-    NSLog(@"local list without yelp: %@", localAppspotArray);
-    
-    if(businessArray.count > 0)
-    {
         
-        NSLog(@"start iterating: business array count: %d", (int)businessArray.count);
-        int addedYelpBusinesses = 0;
-        
-        //add yelp and foursquare results to local business list
         for(int i = 0; i < businessArray.count; i++)
         {
-            yelpCheckIsDone = NO;
-            int matchingCount = 0;
             
             NSLog(@"entered for loop i");
             
             NSDictionary* businessInfo = [businessArray objectAtIndex:i];
-            NSString* yelpBusinessName = [businessInfo objectForKey:@"name"];
+            yelpBusinessName = [businessInfo objectForKey:@"name"];
             NSDictionary* yelpBusinessAddressArray = [businessInfo objectForKey:@"location"];
-            NSString* yelpBusinessAddress = [yelpBusinessAddressArray objectForKey:@"address"];
+            yelpBusinessAddress = [yelpBusinessAddressArray objectForKey:@"address"];
             NSString* yelpBusinessUniqueString = [NSString stringWithFormat:@"%@ %@", yelpBusinessName, yelpBusinessAddress];
             
             NSLog(@"appspot business name %@", yelpBusinessUniqueString);
             
             
-            for(int j = 0; j < appspotJSON.count; j++)
+            if(![yelpBusinessName isEqualToString:business.name] && ![yelpBusinessAddress isEqualToString:business.address])
             {
-                NSLog(@"entered for loop j");
-                
-                NSString* appspotBusinessName = [appspotJSON objectForKey:@"name"];
-                NSString* appspotBusinessAddress = [appspotJSON objectForKey:@"address"];
-                NSString* appspotBusinessUniqueString = [NSString stringWithFormat:@"%@ %@", appspotBusinessName, appspotBusinessAddress];
-                
-                if([yelpBusinessUniqueString isEqualToString:appspotBusinessUniqueString])
-                {
-                    NSLog(@"found a match!");
-                    matchingCount ++;
-                }
+                noMatchCount++;
             }
             
-            if(matchingCount == 0)//yelp business is not in appspot server
-            {
-                TWSBusiness *business = [TWSBusiness new];
-                
-                
-                business.name = yelpBusinessName;
-                business.address = yelpBusinessAddress;
-                business.rating = 2;
-                business.ratingCount = 0;
-                
-                NSCharacterSet *notAllowedChars = [[NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789"] invertedSet];
-                
-                NSString *addressString = [NSString stringWithFormat:@"%@ %@ %@", yelpBusinessAddress, [yelpBusinessAddressArray objectForKey:@"postal_code"], [yelpBusinessAddressArray objectForKey:@"country_code"]];
-                addressString = [[addressString componentsSeparatedByCharactersInSet:notAllowedChars] componentsJoinedByString:@""];
-                NSLog(@"Yelp address string: %@", addressString);
-                business.geocodeAddress = addressString;
-                
-                if([geocodePostString isEqualToString:@""])
-                {
-                    geocodePostString = [NSString stringWithFormat:@"\"%@\"", addressString];
-                }
-                else
-                {
-                    geocodePostString = [NSString stringWithFormat:@"%@, \"%@\"", geocodePostString, addressString];
-                }
-                
-                addedYelpBusinesses ++;
-                
-                [localAppspotArray addObject:business];
-            }
+            
         }
-        geocodePostString = [NSString stringWithFormat:@"[%@]", geocodePostString];
         
-        
-        NSLog(@"geocodePostString: %@", geocodePostString);
-        
-        [self postRequestWithHTTPBody:geocodePostString atURL:[NSURL URLWithString:@"http://www.datasciencetoolkit.org/street2coordinates"] andPostType:geocodePost];
-        
-        
-        
-        //sort
+        if(noMatchCount == 0)
+        {
+            TWSBusiness *newYelpBusiness = [TWSBusiness new];
+            
+            newYelpBusiness.name = yelpBusinessName;
+            newYelpBusiness.address = yelpBusinessAddress;
+            newYelpBusiness.rating = 2;
+            newYelpBusiness.ratingCount = 0;
+            
+            newAppspotOffset++;
+            
+            [localAppspotArray addObject:business];
 
+            
+            if([geocodePostString isEqualToString:@""])
+            {
+                geocodePostString = [NSString stringWithFormat:@"\"%@\"", yelpBusinessAddress];
+            }
+            else
+            {
+                geocodePostString = [NSString stringWithFormat:@"%@, \"%@\"", geocodePostString, yelpBusinessAddress];
+            }
+
+        }
     }
-    else//empty yelp list
+    
+    if(![geocodePostString isEqualToString:@""])
     {
-        NSLog(@"empty yelp list :(");
+        geocodePostString = [NSString stringWithFormat:@"[%@]", geocodePostString];
+    
+    
+        NSLog(@"geocodePostString: %@", geocodePostString);
+    
+        [self postRequestWithHTTPBody:geocodePostString atURL:[NSURL URLWithString:@"http://www.datasciencetoolkit.org/street2coordinates"] andPostType:geocodePost];
     }
+    
 }
 
 #pragma mark - Still Needs Categorized
+
 
 
 -(void)businessSortByDistanceWithNumberOfAddedYelpBusinesses:(int)yelpBusinesses andGeocodeData:(NSData*)data
@@ -576,9 +572,9 @@ typedef enum
     
     NSDictionary* geocodeJSON = [NSJSONSerialization JSONObjectWithData:data options:kNilOptions error:nil];
     
-    int yelpBusinessesAdded = abs(localAppspotArray.count - appspotServerResponseCount);
+    int yelpBusinessesAdded = abs((int)localAppspotArray.count - appspotServerResponseCount);
     
-    for(int i = abs(localAppspotArray.count - yelpBusinessesAdded); i < localAppspotArray.count; i++)
+    for(int i = abs((int)localAppspotArray.count - yelpBusinessesAdded); i < localAppspotArray.count; i++)
     {
         business = localAppspotArray[i];
         NSDictionary *businessInfo = [geocodeJSON objectForKey:business.geocodeAddress];
@@ -591,11 +587,12 @@ typedef enum
         business.distanceFromUserLocation = [NSNumber numberWithDouble:[businessLocation distanceFromLocation:locationManager.location]];
     }
     
+    //post new yelp businesses to appspot
     
     //sort by distance
     NSSortDescriptor *distanceDescriptor = [[NSSortDescriptor alloc] initWithKey:@"distanceFromUserLocation" ascending:YES];
     NSArray *sortDescriptors = @[distanceDescriptor];
-    NSArray *sortedBusinessArray = [localAppspotArray sortedArrayUsingDescriptors:sortDescriptors];
+    sortedBusinessArray = [localAppspotArray sortedArrayUsingDescriptors:sortDescriptors];
     
     
     for(int i = 0; i < localAppspotArray.count; i++)
@@ -605,7 +602,7 @@ typedef enum
     }
     
     //addpins to map
-    [self addPinsToMap];//need to properly override annotation class
+    [self displayAnnotations];
     
     //update picker
     [self updatePickerView];
@@ -702,203 +699,6 @@ typedef enum
 
 
 
-/************TABLE VIEW****************/
-#pragma mark - Table View Methods
-
-- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView
-{
-    return 1;
-}
-
-- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section
-{
-    return [businessArray count] +1;
-}
-
-
-- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath
-{
-    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"Cell"];
-    
-    if (cell == nil)
-    {
-        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:@"Cell"];
-    }
-    if([businessArray count] > 0 && indexPath.row < [businessArray count])
-    {
-        //TO DO:implementation of colored rows
-        //cell.backgroundColor = [UIColor whiteColor];//alpha?
-        NSDictionary* business = [businessArray objectAtIndex:indexPath.row];
-        cell.textLabel.text = [business objectForKey:@"name"];
-        
-        //arts,airports,bookstores,churches,coffee,education, food,hostels,hotels,internetcafe,publicservicesgovt,restaurants,sharedofficespaces,stadiumsarenas,venues
-        
-        NSArray* categories = [business objectForKey:@"categories"];
-        NSArray* categoryArray = categories[0];
-        NSString* category = categoryArray[1];
-        //int cellHeight = cell.imageView.bounds.size.height*.25;
-        
-        UIImage *cellImage;
-        businessCategory = (int)[categoryTypeArray indexOfObject:category];
-        
-        switch(businessCategory)
-        {
-            case arts:
-                cellImage = [UIImage imageWithPDFNamed:@"music.pdf" atHeight:15];
-                [cellImage setAccessibilityIdentifier:@"music"];
-                cell.imageView.image = cellImage;
-                break;
-            case airports:
-                cellImage = [UIImage imageWithPDFNamed:@"airport.pdf" atHeight:15];
-                [cellImage setAccessibilityIdentifier:@"airport"];
-                cell.imageView.image = cellImage;
-                break;
-            case bookstores:
-                cellImage = [UIImage imageWithPDFNamed:@"book.pdf" atHeight:15];
-                [cellImage setAccessibilityIdentifier:@"book"];
-                cell.imageView.image = cellImage;
-                break;
-            case churches:
-                cellImage = [UIImage imageWithPDFNamed:@"church.pdf" atHeight:15];
-                [cellImage setAccessibilityIdentifier:@"church"];
-                cell.imageView.image = cellImage;
-                break;
-            case coffee:
-                cellImage = [UIImage imageWithPDFNamed:@"coffee.pdf" atHeight:15];
-                [cellImage setAccessibilityIdentifier:@"coffee"];
-                cell.imageView.image = cellImage;
-                break;
-            case education:
-                cellImage = [UIImage imageWithPDFNamed:@"education.pdf" atHeight:15];
-                [cellImage setAccessibilityIdentifier:@"education"];
-                cell.imageView.image = cellImage;
-                break;
-            case food:
-                cellImage = [UIImage imageWithPDFNamed:@"restaurants.pdf" atHeight:15];
-                [cellImage setAccessibilityIdentifier:@"restaurants"];
-                cell.imageView.image = cellImage;
-                break;
-            case hostels:
-                cellImage = [UIImage imageWithPDFNamed:@"hostel.pdf" atHeight:15];
-                [cellImage setAccessibilityIdentifier:@"hostel"];
-                cell.imageView.image = cellImage;
-                break;
-            case hotels:
-                cellImage = [UIImage imageWithPDFNamed:@"hotel.pdf" atHeight:15];
-                [cellImage setAccessibilityIdentifier:@"hotel"];
-                cell.imageView.image = cellImage;
-                break;
-            case internetcafe:
-                cellImage = [UIImage imageWithPDFNamed:@"laptop.pdf" atHeight:15];
-                [cellImage setAccessibilityIdentifier:@"laptop"];
-                cell.imageView.image = cellImage;
-                break;
-            case publicservicesgovt:
-                cellImage = [UIImage imageWithPDFNamed:@"book.pdf" atHeight:15];
-                [cellImage setAccessibilityIdentifier:@"book"];
-                cell.imageView.image = cellImage;
-                break;
-            case restaurants:
-                cellImage = [UIImage imageWithPDFNamed:@"restaurants.pdf" atHeight:15];
-                [cellImage setAccessibilityIdentifier:@"restaurants"];
-                cell.imageView.image = cellImage;
-                break;
-            case sharedofficespaces:
-                cellImage = [UIImage imageWithPDFNamed:@"laptop.pdf" atHeight:15];
-                [cellImage setAccessibilityIdentifier:@"laptop"];
-                cell.imageView.image = cellImage;
-                break;
-            case stadiumsarenas:
-                cellImage = [UIImage imageWithPDFNamed:@"venues.pdf" atHeight:15];
-                [cellImage setAccessibilityIdentifier:@"venues"];
-                cell.imageView.image = cellImage;
-                break;
-            case venues:
-                cellImage = [UIImage imageWithPDFNamed:@"venues.pdf" atHeight:15];
-                [cellImage setAccessibilityIdentifier:@"venues"];
-                cell.imageView.image = cellImage;
-                break;
-            default:
-                cellImage = [UIImage imageWithPDFNamed:@"defaultCategory.pdf" atHeight:15];
-                [cellImage setAccessibilityIdentifier:@"defaultCategory"];
-                cell.imageView.image = cellImage;
-                break;
-        }
-    }
-    else
-    {
-        cell.textLabel.text = @"Show More";
-        //cell.imageView.image = [UIImage imageNamed:<#(NSString *)#>//:@"plus.pdf" //atHeight:15];
-    }
-    //[tableViewIndexPathArray addObject:[NSIndexPath indexPathForRow:indexPath.row inSection:indexPath.row]];
-    return cell;
-}
-
-- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath
-{
-    if(indexPath.row == [businessArray count])
-    {
-        [tableView deselectRowAtIndexPath:indexPath animated:YES];
-        if(searchBusinessNameString.length > 0 && !isTitledName)
-        {
-            searchOffset += 3;
-        }
-        else
-        {
-            searchOffset += 10;
-        }
-        wasShowMoreClicked = YES;
-        [self yelpCall:searchOffset];
-    }
-    else
-    {
-        [tableView deselectRowAtIndexPath:indexPath animated:YES];
-    
-        clickedTitle = [tableView cellForRowAtIndexPath:indexPath].textLabel.text;
-        howIsTheWifiLabel.text = [NSString stringWithFormat:@"So you're at\r%@\rHow's the wifi?", clickedTitle];
-        
-        clickedRow = (int)indexPath.row;
-    
-        blurredImage = [self captureScreenInRect:mapView];
-        [blurView setImage:blurredImage];
-        
-        if([tableView cellForRowAtIndexPath:indexPath].imageView.image.accessibilityIdentifier.length > 0)
-        {
-            shareCategoryImageView.image = [UIImage imageWithPDFNamed:[NSString stringWithFormat:@"%@BG.pdf", [tableView cellForRowAtIndexPath:indexPath].imageView.image.accessibilityIdentifier] atHeight:shareCategoryImageView.bounds.size.height];
-        }
-        else
-        {
-            shareCategoryImageView.image = [UIImage imageWithPDFNamed:@"defaultCategoryBG.pdf" atHeight:shareCategoryImageView.bounds.size.height];;//set to default needed!!!!!!!!!!
-        }
-    
-        [UIView animateWithDuration:.5 animations:^
-         {
-             [mainTableView setCenter:CGPointMake(mainTableView.center.x, halfScreenHeight*3)];
-             [searchFilter setCenter:CGPointMake(halfScreenWidth, refreshButton.bounds.size.height*.5)];
-         }completion:^(BOOL finished)
-         {
-             
-         }];
-    
-        [UIView animateWithDuration:.4 delay:.2 options:UIViewAnimationOptionCurveLinear animations:^
-         {
-             [rateMiddleView setCenter:CGPointMake(halfScreenWidth, rateMiddleView.center.y)];
-             [rateBottomView setCenter:CGPointMake(halfScreenWidth, rateBottomView.center.y)];
-             [rateNavBarView setCenter:CGPointMake(halfScreenWidth, rateNavBarView.bounds.size.height*.5)];
-             [blurView setAlpha:1];
-         }completion:^(BOOL finished)
-         {
-             //[blurVie1w setContentMode:UIViewContentModeTopLeft];
-         }];
-    }
-    
-}
-
-/*- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section
-{
-    return [NSString stringWithFormat:@"Wifi Near %@", location];
-}*/
-
 #pragma mark - UIPickerView
 
 -(NSInteger)numberOfComponentsInPickerView:(UIPickerView *)pickerView
@@ -914,7 +714,7 @@ typedef enum
 {
     if(didLoadBusinessData)
     {
-        TWSBusiness *business = [localAppspotArray objectAtIndex:row];
+        TWSBusiness *business = [sortedBusinessArray objectAtIndex:row];
         
         return business.name;
     }
@@ -926,7 +726,18 @@ typedef enum
 
 -(void)pickerView:(UIPickerView *)pickerView didSelectRow:(NSInteger)row inComponent:(NSInteger)component
 {
+    TWSBusiness *business = sortedBusinessArray[row];
+
+
+   [[SingletonPropertyManager sharedPropertyManager] setSelectedBusiness:business];
     
+    for(MapViewAnnotation *annotation in mapView.annotations)
+    {
+        if([annotation.title isEqualToString:business.name])
+        {
+            [mapView selectAnnotation:annotation animated:YES];
+        }
+    }
 }
 
 
@@ -958,20 +769,24 @@ typedef enum
             //self.mapView.showsUserLocation = NO;
             MKCoordinateRegion region = MKCoordinateRegionMakeWithDistance(newLocation.coordinate, radius, radius);
             //[self postRequestWithHTTPBody];
+            
+            
+            
             dispatch_async(urlRequestQueue, ^(void)
             {
                 [_activityIndicator startAnimating];
                 [self sendUrlRequestsWithYelpCategory:@"" andYelpQueryOffset:0 usingRegion:region andUserLocation:newLocation];
-                //[self appspotRequestWithRegion:region andLocation:newLocation];
+//                [self appspotRequestWithRegion:region andLocation:newLocation];
                 [_activityIndicator stopAnimating];
             });
             
+             
             sentRequest = YES;
             
             //set visible rect
             MKMapPoint userLocationPoint = MKMapPointForCoordinate(newLocation.coordinate);//these are beeing used twice, maybe unnecessarily
-            MKMapRect mapRect = MKMapRectMake(userLocationPoint.x, userLocationPoint.y, region.span.latitudeDelta, region.span.longitudeDelta);
-            [mapView setVisibleMapRect:(mapRect) edgePadding:UIEdgeInsetsMake(5, 5, 5, 5) animated:YES];
+            MKMapRect mapRect = MKMapRectMake(userLocationPoint.x, userLocationPoint.y, radius, radius);
+            [mapView setVisibleMapRect:(mapRect) edgePadding:UIEdgeInsetsMake(5, 5, 5, 5) animated:NO];
             
         }
     }
@@ -996,26 +811,19 @@ typedef enum
 
 -(void)postRequestWithHTTPBody:(NSString*)bodyData atURL:(NSURL*)url andPostType:(int)postType
 {
-    //NSURL *url = [NSURL URLWithString:@"http://www.datasciencetoolkit.org/street2coordinates"];
     
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
-    // Set request type
     request.HTTPMethod = @"POST";
     
-    // Set params to be sent to the server
-    //NSString *params = [NSString stringWithFormat:@"[\"2543 Graystone Place 93065 US\", \"400 \"]"];
-    //NSLog(@"params: %@", params);
-    // Encoding type
+
     NSData *data = [bodyData dataUsingEncoding:NSUTF8StringEncoding];
-    // Add values and contenttype to the http header
+
     [request addValue:@"8bit" forHTTPHeaderField:@"Content-Transfer-Encoding"];
     [request addValue:@"application/x-www-form-urlencoded" forHTTPHeaderField:@"Content-Type"];
-    //[request addValue:@"accounts.google.com" forHTTPHeaderField:@"Host:"];
-    //[request addValue:[NSString stringWithFormat:@"%lu", (unsigned long)[data length]] forHTTPHeaderField:@"Content-Length"];
+
+    
     [request setHTTPBody:data];
-    //NSURLResponse *response;
-    //NSError *error = nil;
-    // Send the request
+
     [NSURLConnection sendAsynchronousRequest:request queue:[NSOperationQueue mainQueue] completionHandler:^(NSURLResponse *response, NSData *data, NSError *error)
      {
          NSLog(@"geocode connection!");
@@ -1024,14 +832,12 @@ typedef enum
          switch(postType)
          {
              case 0:
-                 //asyncronously post new data to appspot
-                 [self businessSortByDistanceWithNumberOfAddedYelpBusinesses:10 andGeocodeData:data];//10 should be a variable
+                 [self businessSortByDistanceWithNumberOfAddedYelpBusinesses:newAppspotOffset andGeocodeData:data];
                  break;
              case 1:
                  break;
          }
          
-         //NSDictionary *authJSON = [NSJSONSerialization JSONObjectWithData:_data options:kNilOptions error:nil];
 
      }];
 
@@ -1252,86 +1058,55 @@ typedef enum
     
 }
 
-#pragma mark - Map View
 
-- (void)mapViewDidFinishLoadingMap:(MKMapView *)mapView
-{
-    //NSURLRequest *request = [NSURLRequest requestWithURL:[NSURL URLWithString:[NSString stringWithFormat:@"http://api.yelp.com/business_review_search?term=wifi&lat=%f&long=%f&radius=1.5&limit=2&ywsid=zYc7ai2VYpLEZ6twERVDRA", locationManager.location.coordinate.latitude, locationManager.location.coordinate.longitude]]];
-    //[NSURLConnection connectionWithRequest:request delegate:self];
-    
-
-}
--(void)mapViewDidFailLoadingMap:(MKMapView *)mapView withError:(NSError *)error
-{
-    
-}
--(void)mapViewWillStartLocatingUser:(MKMapView *)mapView
-{
-    
-}
--(void)mapViewDidStopLocatingUser:(MKMapView *)mapView
-{
-    
-}
-
--(void)mapView:(MKMapView *)mapView didAddAnnotationViews:(NSArray *)views
-{
-    //NSLog(@"lum");
-    //[self.mapView showAnnotations:self.mapView.annotations animated:YES];
-    //[self.mapView setVisibleMapRect:MKMapRectMake(self.mapView.annotationVisibleRect.origin.x, self.mapView.annotationVisibleRect.origin.y, self.mapView.annotationVisibleRect.size.width, self.mapView.annotationVisibleRect.size.height) animated:YES];
-     //self.mapView.pitchEnabled = YES;
-}
 
 
 /************ANNOTATION VIEW****************/
 #pragma mark - View For Annotations
 
-- (MKAnnotationView *)mapView:(MKMapView *)mapView viewForAnnotation:(MapViewAnnotation *)annotation
+-(void)displayAnnotations
 {
-    
-    MKAnnotationView *annotationView = (MKAnnotationView *)[self.mapView dequeueReusableAnnotationViewWithIdentifier:@"viewIdentifier"];
-	if(annotationView == nil)
-	{
-		annotationView = [[MKAnnotationView alloc] initWithAnnotation:annotation reuseIdentifier:@"viewIdentifier"];
-	}
-    
-    if([annotation isKindOfClass:[MKUserLocation class]])
+    for(int i = 0; i < localAppspotArray.count; i++)
     {
-        //created annotation twice?????? fix this!
-        annotationView = [[AnimatedUserLocation alloc] initWithAnnotation:annotation reuseIdentifier:@"viewIdentifier"];
+        TWSBusiness *business = [sortedBusinessArray objectAtIndex:i];
+        CLLocationCoordinate2D coord = CLLocationCoordinate2DMake(business.latitude, business.longitude);
+        MapViewAnnotation *annotation = [MapViewAnnotation new]; //initWithTitle:business.name subtitle:business.address rating:business.rating andCoordinates:coord];
+        annotation.title = business.name;
+        //annotation.subtitle = business.address;//bug here!
+        annotation.rating = business.rating;
+        annotation.coordinate = coord;
+ 
+        [mapView addAnnotation:annotation];
+    }
+    NSLog(@"%@", mapView.annotations);
+}
+
+- (MKAnnotationView *)mapView:(MKMapView *)_mapView viewForAnnotation:(MapViewAnnotation *)annotation
+{
+    if([annotation isKindOfClass:[MapViewAnnotation class]])
+    {
+        MapViewAnnotation *businessAnnotation = (MapViewAnnotation*)annotation;
+        MKAnnotationView *annotationView = [_mapView dequeueReusableAnnotationViewWithIdentifier:@"MyCustomAnnotation"];
+        
+        
+        if(annotation != nil)
+        {
+            annotationView = businessAnnotation.annotationView;
+            UIButton *infoButton = [UIButton buttonWithType:UIButtonTypeDetailDisclosure];
+            [infoButton addTarget:self action:@selector(infoButtonClicked) forControlEvents:UIControlEventTouchUpInside];
+            annotationView.rightCalloutAccessoryView = infoButton;
+        }
+        else
+        {
+            annotationView.annotation = annotation;
+        }
+        
         return annotationView;
-       // return nil;
     }
-    
-    //new rating will be -1 0 and 1
-	switch (annotation.wifiRating)
+    else
     {
-        case 1:
-             annotationView.image = [UIImage imageNamed:@"bad.png"];
-            annotationView.frame = CGRectMake(0, 0, annotationView.image.size.width * .166, annotationView.image.size.height * .166);
-            break;
-        case 2:
-            annotationView.image = [UIImage imageNamed:@"meh.png" ];
-            annotationView.frame = CGRectMake(0, 0, annotationView.image.size.width * .166, annotationView.image.size.height * .166);
-            break;
-        case 3:
-            annotationView.image = [UIImage imageNamed:@"soGood.png"];
-            annotationView.frame = CGRectMake(0, 0, annotationView.image.size.width * .166, annotationView.image.size.height * .166);//.166 = 1/6 
-            break;
-        default:
-            annotationView.image = [UIImage imageNamed:@"noRating.png"];
-            break;
+        return nil;
     }
-    
-    UIButton *rightButton   =   [UIButton buttonWithType:UIButtonTypeCustom];
-    rightButton.frame       =   CGRectMake(0, 0, 50, 30);
-    [rightButton setBackgroundColor:[UIColor blueColor]];//:@"Info!" forState:UIControlStateNormal];
-    
-    annotationView.rightCalloutAccessoryView = rightButton;
-    
-    annotationView.canShowCallout = YES;
-    
-    return annotationView;
 }
 
 
@@ -1501,12 +1276,14 @@ typedef enum
 
 - (IBAction)refresh:(id)sender
 {
+    
     dismissedAlert = NO;//?
-    [UIApplication sharedApplication].networkActivityIndicatorVisible = YES;
-    [_activityIndicator startAnimating];
+    //[UIApplication sharedApplication].networkActivityIndicatorVisible = YES;
+    //[_activityIndicator startAnimating];
+    [[self navigationController]pushViewController:infoViewController animated:YES];
 
     
-    [self searchBarSearchButtonClicked:searchBar];
+    //[self searchBarSearchButtonClicked:searchBar];
 }
 
 - (IBAction)searchToggleButton:(id)sender
@@ -1565,12 +1342,12 @@ typedef enum
     [[self navigationController]presentModalViewController:modalTableViewController animated:YES];
 }
 
-- (IBAction)infoButtonClicked:(id)sender
+- (void)infoButtonClicked
 {
     [[self navigationController]pushViewController:infoViewController animated:YES];
 }
 
-#pragma mark - Read and Write to Device
+#pragma mark - Read and Write to Device, move to app delegate
 
 -(NSString *)readFileNamed:(NSString *)fileName
 {
